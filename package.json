@@ -1,0 +1,21 @@
+{
+  "name": "check-hns",
+  "version": "1.0.0",
+  "description": "Resolve Handshake (HNS) domains via hsd SPV node (direct blockchain resolution)",
+  "main": "check_hns.js",
+  "bin": {
+    "check-hns": "./check_hns.js"
+  },
+  "scripts": {
+    "sync": "node check_hns.js sync",
+    "query": "node check_hns.js query",
+    "start": "node check_hns.js sync"
+  },
+  "dependencies": {
+    "hsd": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
