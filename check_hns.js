@@ -42,6 +42,9 @@ const RECORD_NAMES = {
 };
 const QUERY_TYPES = [types.A, types.AAAA, types.NS, types.CNAME, types.TXT];
 
+// Codes that trigger direct NS fallback
+const FALLBACK_CODES = new Set([2 /* SERVFAIL */, 5 /* REFUSED */]);
+
 function queryDNS(host, port, domain, qtype, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const msg = new Message();
@@ -81,6 +84,106 @@ function recordToString(rr) {
   return { typeName, data, ttl: rr.ttl };
 }
 
+/**
+ * Extract the TLD from a domain (e.g. "shakeshift" -> "shakeshift",
+ * "welcome.nb" -> "nb", "handshake.conference" -> "conference").
+ */
+function getTLD(domain) {
+  const dot = domain.lastIndexOf('.');
+  return dot === -1 ? domain : domain.substring(dot + 1);
+}
+
+/**
+ * Query the authoritative root server for NS referral for a TLD,
+ * then resolve each nameserver's IP (also via root + direct query).
+ * Returns array of {ns, ip}.
+ */
+async function getRootReferral(rsHost, nsPort, tld) {
+  try {
+    const res = await queryDNS(rsHost, nsPort, tld, types.NS, 5000);
+    if (res.code !== 0) return [];
+
+    // Collect glue A records from additional section
+    const glue = {};
+    for (const rr of res.additional) {
+      if (rr.type === types.A)
+        glue[rr.name.toLowerCase()] = rr.data.address;
+    }
+
+    // Collect NS names
+    const nsNames = [];
+    for (const rr of [...res.authority, ...res.answer]) {
+      if (rr.type === types.NS) nsNames.push(rr.data.ns.toLowerCase());
+    }
+
+    const result = [];
+    for (const ns of nsNames) {
+      // Check inline glue first
+      if (glue[ns]) { result.push({ ns, ip: glue[ns] }); continue; }
+
+      // No glue — the NS is likely an HNS name itself (e.g. a.namenode.).
+      // Resolve its TLD via root to get synth/glue IPs, then query that NS
+      // for the A record of the full NS name.
+      const nsTLD = getTLD(ns.replace(/\.$/, ''));
+      try {
+        const tldRes = await queryDNS(rsHost, nsPort, nsTLD, types.A, 5000);
+        // Check for glue/synth in additional
+        for (const rr of tldRes.additional) {
+          if (rr.type === types.A && rr.name.toLowerCase() === ns)
+            glue[ns] = rr.data.address;
+        }
+        if (glue[ns]) { result.push({ ns, ip: glue[ns] }); continue; }
+
+        // The NS TLD itself may have NS records with glue — resolve those
+        // and query them for the NS hostname's A record.
+        const nsGlue = {};
+        for (const rr of tldRes.additional) {
+          if (rr.type === types.A) nsGlue[rr.name.toLowerCase()] = rr.data.address;
+        }
+        const nsTLDNSNames = [];
+        for (const rr of [...tldRes.authority, ...tldRes.answer]) {
+          if (rr.type === types.NS) nsTLDNSNames.push(rr.data.ns.toLowerCase());
+        }
+        // Try to query each NS TLD's nameserver for the full NS hostname
+        for (const nsTLDNS of nsTLDNSNames) {
+          const ip = nsGlue[nsTLDNS];
+          if (!ip) continue;
+          try {
+            const aRes = await queryDNS(ip, 53, ns.replace(/\.$/, ''), types.A, 5000);
+            if (aRes.code === 0) {
+              for (const rr of aRes.answer) {
+                if (rr.type === types.A) {
+                  result.push({ ns, ip: rr.data.address });
+                  break;
+                }
+              }
+            }
+            if (result.find(r => r.ns === ns)) break;
+          } catch (e) { /* try next */ }
+        }
+      } catch (e) { /* skip this NS */ }
+    }
+    return result;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Directly query external nameservers for a domain.
+ * Tries each nameserver in order until one responds.
+ */
+async function queryNameserversDirect(nameservers, domain, qtype) {
+  for (const {ns, ip} of nameservers) {
+    try {
+      return await queryDNS(ip, 53, domain, qtype, 8000);
+    } catch (e) {
+      // Try next NS
+    }
+  }
+  return null;
+}
+
 async function resolveDomain(rsHost, rsPort, domain) {
   console.log(`\n${'='.repeat(55)}`);
   console.log(`Domain: ${domain}`);
@@ -88,6 +191,7 @@ async function resolveDomain(rsHost, rsPort, domain) {
 
   let anyRecords = false;
   let nxdomain = false;
+  let needFallback = false;
 
   for (const qtype of QUERY_TYPES) {
     const typeName = RECORD_NAMES[qtype] || `TYPE${qtype}`;
@@ -96,7 +200,8 @@ async function resolveDomain(rsHost, rsPort, domain) {
       if (res.code !== 0) {
         if (qtype === QUERY_TYPES[0]) {
           const codeName = ['NOERROR','FORMERR','SERVFAIL','NXDOMAIN','NOTIMP','REFUSED'][res.code] || `CODE${res.code}`;
-          console.log(`  RCODE: ${codeName}`);
+          console.log(`  RCODE: ${codeName} (recursive resolver)`);
+          if (FALLBACK_CODES.has(res.code)) { needFallback = true; break; }
           for (const rr of res.authority) {
             const r = recordToString(rr);
             console.log(`  (authority) ${r.typeName.padEnd(6)} ${r.data}`);
@@ -114,6 +219,45 @@ async function resolveDomain(rsHost, rsPort, domain) {
       if (qtype === QUERY_TYPES[0]) {
         console.log(`  ${typeName.padEnd(6)} ERROR: ${e.message}`);
         if (e.message === 'TIMEOUT') break;
+      }
+    }
+  }
+
+  // Direct NS fallback: when the JS recursive resolver can't follow
+  // HNS-native nameservers (e.g. a.namenode.), get NS+glue from the
+  // authoritative root and query the nameservers directly.
+  if (needFallback) {
+    const tld = getTLD(domain);
+    console.log(`  Falling back to direct NS query for TLD "${tld}"...`);
+
+    const nameservers = await getRootReferral(rsHost, NS_PORT, tld);
+    if (nameservers.length === 0) {
+      console.log('  No nameservers with glue records found on-chain');
+    } else {
+      console.log(`  Nameservers: ${nameservers.map(n => `${n.ns} (${n.ip})`).join(', ')}`);
+
+      for (const qtype of QUERY_TYPES) {
+        const typeName = RECORD_NAMES[qtype] || `TYPE${qtype}`;
+        const res = await queryNameserversDirect(nameservers, domain, qtype);
+        if (!res) { if (qtype === QUERY_TYPES[0]) console.log('  All nameservers unreachable'); break; }
+
+        if (res.code !== 0) {
+          if (qtype === QUERY_TYPES[0]) {
+            const codeName = ['NOERROR','FORMERR','SERVFAIL','NXDOMAIN','NOTIMP','REFUSED'][res.code] || `CODE${res.code}`;
+            console.log(`  RCODE: ${codeName} (direct NS)`);
+            for (const rr of res.authority) {
+              const r = recordToString(rr);
+              console.log(`  (authority) ${r.typeName.padEnd(6)} ${r.data}`);
+            }
+            if (res.code === 3) { nxdomain = true; break; }
+          }
+          continue;
+        }
+        for (const rr of res.answer) {
+          const r = recordToString(rr);
+          anyRecords = true;
+          console.log(`  ${r.typeName.padEnd(6)} ${r.data}  (TTL=${r.ttl})`);
+        }
       }
     }
   }
