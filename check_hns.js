@@ -8,13 +8,15 @@
  * Uses the hnsd C binary (built from source) as a lightweight SPV node with
  * libunbound-based recursive DNS resolution. No npm dependencies required.
  *
- * Three modes:
+ * Four modes:
  *   sync   - Start hnsd and keep it running (background daemon)
  *   query  - Query a running hnsd instance
+ *   proxy  - Start hnsd + local DNS proxy on port 53
  *   auto   - Start hnsd, sync, query, stop (all-in-one)
  *
  * Usage:
  *   node check_hns.js sync                         Start hnsd, wait for sync
+ *   node check_hns.js proxy                        Start hnsd + DNS proxy
  *   node check_hns.js query welcome.nb nb           Query running hnsd
  *   node check_hns.js nb shakeshift                 Auto mode
  *
@@ -28,6 +30,7 @@
 const dgram = require('dgram');
 const { types, buildQuery, parseResponse, rcodeName, typeName, recordToString } = require('./lib/dns_wire');
 const hnsd = require('./lib/hnsd_manager');
+const { startProxy, printDnsInstructions } = require('./lib/dns_proxy');
 
 const QUERY_TYPES = [types.A, types.AAAA, types.NS, types.CNAME, types.TXT];
 
@@ -345,6 +348,50 @@ async function autoMode(domains, opts) {
   console.log('Done.');
 }
 
+async function proxyMode(opts) {
+  console.log('HNS Domain Resolver — DNS Proxy Mode');
+  console.log(`Data dir: ${hnsd.DATA_DIR}`);
+  console.log();
+
+  const { child } = hnsd.start({ hnsdPath: opts.hnsdPath });
+
+  child.stderr.on('data', (data) => {
+    for (const line of data.toString().split('\n')) {
+      if (line.trim()) process.stderr.write(`  [hnsd] ${line}\n`);
+    }
+  });
+
+  let proxy;
+  const cleanup = () => {
+    console.log('\nShutting down...');
+    if (proxy) proxy.close();
+    hnsd.stop(child);
+    console.log('\nDNS proxy stopped. Remember to restore your system DNS settings.');
+    process.exit(0);
+  };
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+
+  hnsd.writePidFile(child.pid, hnsd.RS_PORT);
+
+  console.log('Waiting for blockchain sync...');
+  const height = await hnsd.waitForSync(child);
+
+  console.log('Checking resolver readiness...');
+  await hnsd.waitForReady(hnsd.RS_PORT);
+
+  console.log(`\nhnsd synced at height ${height}`);
+
+  proxy = startProxy({ hnsdPort: hnsd.RS_PORT });
+
+  printDnsInstructions();
+
+  console.log('Press Ctrl+C to stop.\n');
+
+  // Keep alive
+  await new Promise(() => {});
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const opts = {};
@@ -359,6 +406,7 @@ async function main() {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(`Usage:
   node check_hns.js sync                         Start hnsd (keep running)
+  node check_hns.js proxy                        Start hnsd + DNS proxy on port 53
   node check_hns.js query <domain> [domain ...]   Query running hnsd
   node check_hns.js <domain> [domain ...]          Auto: sync + query + stop
 
@@ -367,17 +415,20 @@ Options:
 
 Examples:
   node check_hns.js sync                          # Terminal 1: start & sync
+  node check_hns.js proxy                         # DNS proxy (run as admin)
   node check_hns.js query welcome.nb              # Terminal 2: query
   node check_hns.js nb shakeshift                 # Auto mode (waits for sync)
 
 Build hnsd first:
   build_hnsd.cmd                                  # Windows
-  ./build_hnsd.sh                                 # MSYS2 MINGW64 shell`);
+  ./build_hnsd.sh                                 # Mac/Linux/MSYS2`);
     process.exit(0);
   }
 
   if (args[0] === 'sync') {
     await startSyncMode(opts);
+  } else if (args[0] === 'proxy') {
+    await proxyMode(opts);
   } else if (args[0] === 'query') {
     const domains = args.slice(1);
     if (domains.length === 0) {
