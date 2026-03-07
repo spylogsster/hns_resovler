@@ -106,17 +106,21 @@ npm run test:all       # run all tests
 ### HTTP proxy (recommended, no root required)
 
 ```bash
-# 1. Start the proxy
+# 1. Start the proxy (syncs blockchain, then starts HTTP proxy)
 node check_hns.js proxy
 
-# 2. Configure your browser proxy to 127.0.0.1:8053
-#    Or launch Chrome with:
-#      Windows: chrome.exe --proxy-server="http://127.0.0.1:8053"
-#      macOS:   open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:8053"
-#      Linux:   google-chrome --proxy-server="http://127.0.0.1:8053"
+# 2. Launch Chrome with the proxy
+#    Windows:
+chrome.exe --proxy-server="http://127.0.0.1:8053"
+#    macOS:
+open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:8053"
+#    Linux:
+google-chrome --proxy-server="http://127.0.0.1:8053"
 
 # 3. Navigate to http://nb/ or http://shakeshift/
 ```
+
+The proxy prints the platform-specific Chrome launch command when ready.
 
 ### DNS proxy (requires root/admin)
 

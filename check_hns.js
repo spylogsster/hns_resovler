@@ -30,7 +30,7 @@
 const dgram = require('dgram');
 const { types, buildQuery, parseResponse, rcodeName, typeName, recordToString } = require('./lib/dns_wire');
 const hnsd = require('./lib/hnsd_manager');
-const { startHttpProxy, startDnsProxy, printHttpProxyInstructions, printDnsProxyInstructions, DEFAULT_HTTP_PORT } = require('./lib/dns_proxy');
+const { startHttpProxy, startDnsProxy, printChromeCommand, printDnsProxyInstructions, DEFAULT_HTTP_PORT } = require('./lib/dns_proxy');
 
 const QUERY_TYPES = [types.A, types.AAAA, types.NS, types.CNAME, types.TXT];
 
@@ -331,7 +331,7 @@ async function autoMode(domains, opts) {
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 
-  console.log('Waiting for blockchain sync (first run takes ~30 min)...');
+  console.log('Waiting for blockchain sync (first run ~5 min, cached ~1 min)...');
   console.log('Tip: use "node check_hns.js sync" in background for faster workflow.\n');
 
   const height = await hnsd.waitForSync(child);
@@ -368,21 +368,16 @@ async function proxyMode(opts) {
     child = result.child;
     ownedHnsd = true;
 
-    child.stderr.on('data', (data) => {
-      for (const line of data.toString().split('\n')) {
-        if (line.trim()) process.stderr.write(`  [hnsd] ${line}\n`);
-      }
-    });
-
     hnsd.writePidFile(child.pid, rsPort);
 
-    console.log('Waiting for blockchain sync...');
-    await hnsd.waitForSync(child);
+    console.log('Waiting for blockchain sync (first run ~5 min, cached ~1 min)...');
+    console.log('The proxy will start automatically once sync is complete.\n');
+    const height = await hnsd.waitForSync(child);
 
     console.log('Checking resolver readiness...');
     await hnsd.waitForReady(rsPort);
 
-    console.log(`hnsd synced and ready.\n`);
+    console.log(`hnsd synced to height ${height} and ready.\n`);
   }
 
   let proxy;
@@ -402,7 +397,7 @@ async function proxyMode(opts) {
   } else {
     const port = opts.port || DEFAULT_HTTP_PORT;
     proxy = startHttpProxy({ port, hnsdPort: rsPort });
-    printHttpProxyInstructions(port);
+    printChromeCommand(port);
   }
 
   console.log('Press Ctrl+C to stop.\n');

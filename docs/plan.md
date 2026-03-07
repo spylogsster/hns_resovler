@@ -10,7 +10,7 @@ check-hns resolves Handshake (HNS) domains directly from the blockchain. v1 used
 check_hns.js               CLI entry point (sync/query/proxy/auto modes)
   ├── lib/dns_wire.js       DNS wire protocol encoder/decoder (A, AAAA, NS, CNAME, TXT, SOA, MX, SRV, DS)
   ├── lib/hnsd_manager.js   hnsd process lifecycle (spawn, sync detection, readiness polling, PID file)
-  ├── lib/dns_proxy.js      Local DNS proxy (UDP forwarder port 53 → hnsd port 15350)
+  ├── lib/dns_proxy.js      HTTP proxy (port 8053) + DNS proxy (port 53) via hnsd
   └── bin/hnsd[.exe]        Built hnsd binary (gitignored)
 
 build_hnsd.sh               Cross-platform build script (Windows/macOS/Linux)
@@ -43,17 +43,19 @@ Build: `./autogen.sh && ./configure && make` inside vendor/hnsd/
 
 ### Process management
 - hnsd spawned as child process via `child_process.spawn()`
-- Sync detected by parsing stderr for `"chain is fully synced"` message
-- Height tracked via `"chain (N):"` and `"new height: N"` patterns
+- Sync detected by parsing stdout for `"chain is fully synced"` message
+- Height tracked via `"chain (N):"` and `"new height: N"` patterns on stdout
+- Progress printed every 10 seconds (height, target %, elapsed time)
 - Checkpoint flag (`-t`) enabled by default for faster initial sync (~136k block skip)
 - Post-sync readiness polling (hnsd issue #128: Windows doesn't respond to DNS during sync)
 
 ### Ports
-| Port  | Service               |
-|-------|-----------------------|
-| 53    | DNS proxy (proxy mode)|
-| 15349 | Authoritative root NS |
-| 15350 | Recursive resolver    |
+| Port  | Service                          |
+|-------|----------------------------------|
+| 8053  | HTTP proxy (proxy mode, default) |
+| 53    | DNS proxy (proxy --dns mode)     |
+| 15349 | Authoritative root NS            |
+| 15350 | Recursive resolver               |
 
 ### DNS resolution flow
 1. Query hnsd recursive resolver (port 15350) for A, AAAA, NS, CNAME, TXT
@@ -68,12 +70,12 @@ hnsd's authoritative root server includes a hardcoded fallback for ICANN's root 
 
 This means hnsd is a **full recursive resolver** for both HNS and ICANN domains, making the DNS proxy a simple UDP forwarder.
 
-### DNS proxy architecture
+### Proxy architecture
 ```
-Browser / System DNS
-  ↓ query (port 53)
-DNS proxy (lib/dns_proxy.js)
-  ↓ forward (port 15350)
+Chrome (--proxy-server=http://127.0.0.1:8053)
+  ↓ HTTP/CONNECT (port 8053)
+HTTP proxy (lib/dns_proxy.js)
+  ↓ DNS resolve via UDP (port 15350)
 hnsd recursive resolver (libunbound)
   ↓ query (port 15349)
 hnsd authoritative root
@@ -82,7 +84,8 @@ hnsd authoritative root
   └─ Blocked TLD (.onion, .eth, etc.) → NXDOMAIN
 ```
 
-If hnsd doesn't respond within 5 seconds, the proxy falls back to upstream DNS (8.8.8.8) as a safety net.
+Alternative: DNS proxy mode (`--dns`) forwards UDP queries from port 53 → hnsd port 15350.
+If hnsd doesn't respond within 5 seconds, the DNS proxy falls back to upstream DNS (8.8.8.8).
 
 ### Verified resolution results
 | Domain           | Result                    | Method              |
@@ -105,6 +108,6 @@ libunbound handles HNS-native nameserver delegations natively — the direct NS 
 | ICANN domains        | Not supported                    | Embedded root zone fallback      |
 | npm dependencies     | hsd (heavy, pulls bns, bcrypto)  | None                             |
 | DNS wire protocol    | bns library                      | lib/dns_wire.js (self-contained) |
-| Browser integration  | None                             | DNS proxy on port 53             |
+| Browser integration  | None                             | HTTP proxy (8053) / DNS proxy (53) |
 | Build requirement    | npm install                      | autotools + build from source    |
 | Platforms            | Windows only                     | Windows, macOS, Linux            |
