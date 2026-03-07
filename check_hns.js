@@ -258,7 +258,7 @@ async function startSyncMode(opts) {
   console.log(`Recursive resolver will be at 127.0.0.1:${hnsd.RS_PORT}`);
   console.log();
 
-  const { child } = hnsd.start({ hnsdPath: opts.hnsdPath });
+  const { child } = await hnsd.startWithRetry({ hnsdPath: opts.hnsdPath });
 
   // Forward hnsd stderr to console (for debugging)
   child.stderr.on('data', (data) => {
@@ -321,7 +321,7 @@ async function autoMode(domains, opts) {
   console.log(`Domains: ${domains.join(', ')}`);
   console.log(`Data dir: ${hnsd.DATA_DIR}\n`);
 
-  const { child } = hnsd.start({ hnsdPath: opts.hnsdPath, quiet: true });
+  const { child } = await hnsd.startWithRetry({ hnsdPath: opts.hnsdPath, quiet: true });
 
   const cleanup = () => {
     console.log('\nShutting down...');
@@ -364,7 +364,7 @@ async function proxyMode(opts) {
   } catch {
     // No hnsd running — start one
     console.log(`Data dir: ${hnsd.DATA_DIR}\n`);
-    const result = hnsd.start({ hnsdPath: opts.hnsdPath });
+    const result = await hnsd.startWithRetry({ hnsdPath: opts.hnsdPath });
     child = result.child;
     ownedHnsd = true;
 
@@ -477,6 +477,24 @@ Build hnsd first:
 }
 
 main().catch(e => {
-  console.error('Fatal:', e.message || e);
+  const msg = e.message || String(e);
+
+  // User-friendly error formatting
+  if (msg.includes('hnsd binary not found')) {
+    console.error('\nError: hnsd binary not found.');
+    console.error('Build it first:');
+    console.error('  Windows: build_hnsd.cmd');
+    console.error('  Mac/Linux: ./build_hnsd.sh');
+  } else if (msg.includes('Sync timeout')) {
+    console.error('\nError: Blockchain sync timed out.');
+    console.error('This can happen with slow network connections.');
+    console.error('Try again — subsequent syncs are faster (cached state).');
+  } else if (msg.includes('resolver not responding')) {
+    console.error('\nError: hnsd DNS resolver is not responding.');
+    console.error('Try restarting: stop any running hnsd and run again.');
+  } else {
+    console.error(`\nError: ${msg}`);
+  }
+
   process.exit(1);
 });
