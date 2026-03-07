@@ -8,19 +8,25 @@ REM This script launches the build inside the MSYS2 MINGW64 shell.
 
 setlocal
 
+REM Try common MSYS2 locations
 set MSYS2_PATH=C:\msys64
+if exist "%MSYS2_PATH%\usr\bin\bash.exe" goto :found_msys2
 
-if not exist "%MSYS2_PATH%\usr\bin\bash.exe" (
-    echo.
-    echo MSYS2 not found at %MSYS2_PATH%
-    echo.
-    echo Install MSYS2:
-    echo   choco install msys2 -y
-    echo.
-    echo Or download from https://www.msys2.org
-    echo.
-    exit /b 1
-)
+set MSYS2_PATH=C:\tools\msys64
+if exist "%MSYS2_PATH%\usr\bin\bash.exe" goto :found_msys2
+
+echo.
+echo MSYS2 not found at C:\msys64 or C:\tools\msys64
+echo.
+echo Install MSYS2:
+echo   choco install msys2 -y
+echo.
+echo Or download from https://www.msys2.org
+echo.
+exit /b 1
+
+:found_msys2
+echo Found MSYS2 at %MSYS2_PATH%
 
 REM Get the directory of this script
 set SCRIPT_DIR=%~dp0

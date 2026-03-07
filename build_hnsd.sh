@@ -52,7 +52,8 @@ install_packages() {
     mingw-w64-x86_64-unbound \
     autoconf \
     automake \
-    libtool
+    libtool \
+    git
   info "Packages installed."
 }
 
