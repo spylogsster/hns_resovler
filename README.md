@@ -57,15 +57,13 @@ node check_hns.js sync
 First run syncs the blockchain from checkpoint (~5 min). Subsequent runs resume from cached state (~1 min).
 Chain data is stored in `%TEMP%/hnsd-spv-check/` (Windows) or `/tmp/hnsd-spv-check/` (Linux/Mac).
 
-**2. Proxy mode** — start hnsd + local DNS proxy on port 53:
+**2. Proxy mode** — start hnsd + local proxy for browsing HNS domains:
 
 ```bash
-# Windows: run terminal as Administrator
-# Mac/Linux: use sudo
-node check_hns.js proxy
+node check_hns.js proxy                 # HTTP proxy on port 8053 (no root)
+node check_hns.js proxy --port 9090     # HTTP proxy on custom port
+node check_hns.js proxy --dns           # DNS proxy on port 53 (requires root)
 ```
-
-Starts hnsd, waits for sync, then runs a DNS proxy on port 53 that forwards all queries to hnsd. Configure your system DNS to `127.0.0.1` and browse HNS domains in any browser.
 
 **3. Query mode** — query a running hnsd instance:
 
@@ -88,6 +86,8 @@ Waits for full sync, resolves all domains, then exits.
 
 ```
 --hnsd-path <path>   Path to hnsd binary (default: auto-detect from ./bin/)
+--port <port>        Proxy listen port (default: 8053 for HTTP, 53 for DNS)
+--dns                Use DNS proxy instead of HTTP proxy (requires root/admin)
 ```
 
 ### npm scripts
@@ -101,25 +101,39 @@ npm run test:e2e       # run E2E tests (requires running hnsd)
 npm run test:all       # run all tests
 ```
 
-## DNS Proxy — browse HNS domains
+## Browse HNS domains
 
-The proxy mode lets you browse HNS websites in any browser:
+### HTTP proxy (recommended, no root required)
 
 ```bash
-# 1. Start the proxy (requires admin/root for port 53)
+# 1. Start the proxy
 node check_hns.js proxy
 
-# 2. Configure system DNS to 127.0.0.1
-#    Windows (PowerShell as Admin):
-#      netsh interface ip set dns "Wi-Fi" static 127.0.0.1
-#    macOS:
-#      sudo networksetup -setdnsservers Wi-Fi 127.0.0.1
-#    Linux:
-#      sudo resolvectl dns <interface> 127.0.0.1
+# 2. Configure your browser proxy to 127.0.0.1:8053
+#    Or launch Chrome with:
+#      Windows: chrome.exe --proxy-server="http://127.0.0.1:8053"
+#      macOS:   open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:8053"
+#      Linux:   google-chrome --proxy-server="http://127.0.0.1:8053"
 
-# 3. Open any browser and navigate to http://nb/ or http://shakeshift/
+# 3. Navigate to http://nb/ or http://shakeshift/
+```
 
-# 4. When done, restore DNS:
+### DNS proxy (requires root/admin)
+
+```bash
+# 1. Start the DNS proxy
+#    Windows: run terminal as Administrator
+#    Mac/Linux: use sudo
+node check_hns.js proxy --dns
+
+# 2. Set system DNS to 127.0.0.1
+#    Windows: netsh interface ip set dns "Wi-Fi" static 127.0.0.1
+#    macOS:   sudo networksetup -setdnsservers Wi-Fi 127.0.0.1
+#    Linux:   sudo resolvectl dns <interface> 127.0.0.1
+
+# 3. Navigate to http://nb/ in any browser
+
+# 4. Restore DNS when done:
 #    Windows: netsh interface ip set dns "Wi-Fi" dhcp
 #    macOS:   sudo networksetup -setdnsservers Wi-Fi Empty
 #    Linux:   sudo systemctl restart systemd-resolved
@@ -191,7 +205,7 @@ Done.
 check_hns.js                 CLI entry point (sync/query/proxy/auto modes)
   ├── lib/dns_wire.js        DNS wire protocol encoder/decoder (no npm deps)
   ├── lib/hnsd_manager.js    hnsd process lifecycle management
-  ├── lib/dns_proxy.js       Local DNS proxy (UDP forwarder port 53 → hnsd)
+  ├── lib/dns_proxy.js       HTTP proxy + DNS proxy (resolves via hnsd)
   └── bin/hnsd[.exe]         Built hnsd binary (gitignored)
 ```
 
@@ -199,11 +213,12 @@ See [docs/plan.md](docs/plan.md) for detailed architecture notes.
 
 ## Ports
 
-| Port  | Service                     |
-|-------|-----------------------------|
-| 53    | DNS proxy (proxy mode only) |
-| 15349 | Authoritative root server   |
-| 15350 | Recursive resolver (query)  |
+| Port  | Service                          |
+|-------|----------------------------------|
+| 8053  | HTTP proxy (proxy mode, default) |
+| 53    | DNS proxy (proxy --dns mode)     |
+| 15349 | Authoritative root server        |
+| 15350 | Recursive resolver (query)       |
 
 All bound to `127.0.0.1` (localhost only).
 

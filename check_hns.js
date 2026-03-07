@@ -11,7 +11,7 @@
  * Four modes:
  *   sync   - Start hnsd and keep it running (background daemon)
  *   query  - Query a running hnsd instance
- *   proxy  - Start hnsd + local DNS proxy on port 53
+ *   proxy  - Start hnsd + HTTP proxy (no root) or DNS proxy (--dns, root)
  *   auto   - Start hnsd, sync, query, stop (all-in-one)
  *
  * Usage:
@@ -30,7 +30,7 @@
 const dgram = require('dgram');
 const { types, buildQuery, parseResponse, rcodeName, typeName, recordToString } = require('./lib/dns_wire');
 const hnsd = require('./lib/hnsd_manager');
-const { startProxy, printDnsInstructions } = require('./lib/dns_proxy');
+const { startHttpProxy, startDnsProxy, printHttpProxyInstructions, printDnsProxyInstructions, DEFAULT_HTTP_PORT } = require('./lib/dns_proxy');
 
 const QUERY_TYPES = [types.A, types.AAAA, types.NS, types.CNAME, types.TXT];
 
@@ -349,7 +349,9 @@ async function autoMode(domains, opts) {
 }
 
 async function proxyMode(opts) {
-  console.log('HNS Domain Resolver — DNS Proxy Mode');
+  const useDns = opts.dns || false;
+  const mode = useDns ? 'DNS' : 'HTTP';
+  console.log(`HNS Domain Resolver — ${mode} Proxy Mode`);
   console.log(`Data dir: ${hnsd.DATA_DIR}`);
   console.log();
 
@@ -366,7 +368,7 @@ async function proxyMode(opts) {
     console.log('\nShutting down...');
     if (proxy) proxy.close();
     hnsd.stop(child);
-    console.log('\nDNS proxy stopped. Remember to restore your system DNS settings.');
+    console.log(`\n${mode} proxy stopped.${useDns ? ' Remember to restore your system DNS settings.' : ''}`);
     process.exit(0);
   };
   process.on('SIGINT', cleanup);
@@ -382,9 +384,14 @@ async function proxyMode(opts) {
 
   console.log(`\nhnsd synced at height ${height}`);
 
-  proxy = startProxy({ hnsdPort: hnsd.RS_PORT });
-
-  printDnsInstructions();
+  if (useDns) {
+    proxy = startDnsProxy({ hnsdPort: hnsd.RS_PORT });
+    printDnsProxyInstructions();
+  } else {
+    const port = opts.port || DEFAULT_HTTP_PORT;
+    proxy = startHttpProxy({ port, hnsdPort: hnsd.RS_PORT });
+    printHttpProxyInstructions(port);
+  }
 
   console.log('Press Ctrl+C to stop.\n');
 
@@ -396,26 +403,42 @@ async function main() {
   const args = process.argv.slice(2);
   const opts = {};
 
-  // Parse --hnsd-path option
-  const pathIdx = args.indexOf('--hnsd-path');
-  if (pathIdx !== -1) {
-    opts.hnsdPath = args[pathIdx + 1];
-    args.splice(pathIdx, 2);
+  // Parse named options
+  function extractOpt(name, hasValue) {
+    const idx = args.indexOf(name);
+    if (idx === -1) return undefined;
+    if (hasValue) {
+      const val = args[idx + 1];
+      args.splice(idx, 2);
+      return val;
+    }
+    args.splice(idx, 1);
+    return true;
   }
+
+  opts.hnsdPath = extractOpt('--hnsd-path', true);
+  opts.dns = extractOpt('--dns', false);
+  const portStr = extractOpt('--port', true);
+  if (portStr) opts.port = parseInt(portStr);
 
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(`Usage:
   node check_hns.js sync                         Start hnsd (keep running)
-  node check_hns.js proxy                        Start hnsd + DNS proxy on port 53
+  node check_hns.js proxy                        Start hnsd + HTTP proxy (no root)
+  node check_hns.js proxy --dns                  Start hnsd + DNS proxy on port 53 (root)
   node check_hns.js query <domain> [domain ...]   Query running hnsd
   node check_hns.js <domain> [domain ...]          Auto: sync + query + stop
 
 Options:
   --hnsd-path <path>   Path to hnsd binary (default: auto-detect)
+  --port <port>        Proxy listen port (default: 8053 for HTTP, 53 for DNS)
+  --dns                Use DNS proxy instead of HTTP proxy (requires root/admin)
 
 Examples:
   node check_hns.js sync                          # Terminal 1: start & sync
-  node check_hns.js proxy                         # DNS proxy (run as admin)
+  node check_hns.js proxy                         # HTTP proxy on port 8053
+  node check_hns.js proxy --port 9090             # HTTP proxy on custom port
+  node check_hns.js proxy --dns                   # DNS proxy on port 53 (root)
   node check_hns.js query welcome.nb              # Terminal 2: query
   node check_hns.js nb shakeshift                 # Auto mode (waits for sync)
 
