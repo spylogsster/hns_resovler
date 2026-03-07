@@ -368,12 +368,6 @@ async function proxyMode(opts) {
     child = result.child;
     ownedHnsd = true;
 
-    child.stderr.on('data', (data) => {
-      for (const line of data.toString().split('\n')) {
-        if (line.trim()) process.stderr.write(`  [hnsd] ${line}\n`);
-      }
-    });
-
     hnsd.writePidFile(child.pid, rsPort);
 
     console.log('Waiting for blockchain sync (first run ~5 min, cached ~1 min)...');
