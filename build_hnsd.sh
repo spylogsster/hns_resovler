@@ -1,4 +1,8 @@
 #!/bin/bash
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
 # Build hnsd from source using MSYS2/MINGW64
 #
 # This script must be run from an MSYS2 MINGW64 shell, NOT Git Bash.
