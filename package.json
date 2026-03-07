@@ -13,7 +13,7 @@
     "test": "node --test test/test_dns_wire.js test/test_hnsd_spawn.js",
     "test:unit": "node --test test/test_dns_wire.js",
     "test:e2e": "node --test test/test_resolve.js",
-    "test:all": "node --test test/",
+    "test:all": "node --test test/test_dns_wire.js test/test_hnsd_spawn.js test/test_resolve.js",
     "build": "bash build_hnsd.sh"
   },
   "engines": {
