@@ -30,8 +30,7 @@
 const dgram = require('dgram');
 const { types, buildQuery, parseResponse, rcodeName, typeName, recordToString } = require('./lib/dns_wire');
 const hnsd = require('./lib/hnsd_manager');
-const os = require('os');
-const { startHttpProxy, startDnsProxy, printDnsProxyInstructions, DEFAULT_HTTP_PORT } = require('./lib/dns_proxy');
+const { startHttpProxy, startDnsProxy, printChromeCommand, printDnsProxyInstructions, DEFAULT_HTTP_PORT } = require('./lib/dns_proxy');
 
 const QUERY_TYPES = [types.A, types.AAAA, types.NS, types.CNAME, types.TXT];
 
@@ -332,7 +331,7 @@ async function autoMode(domains, opts) {
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 
-  console.log('Waiting for blockchain sync (first run takes ~30 min)...');
+  console.log('Waiting for blockchain sync (first run ~5 min, cached ~1 min)...');
   console.log('Tip: use "node check_hns.js sync" in background for faster workflow.\n');
 
   const height = await hnsd.waitForSync(child);
@@ -347,19 +346,6 @@ async function autoMode(domains, opts) {
   console.log('\nShutting down hnsd...');
   hnsd.stop(child);
   console.log('Done.');
-}
-
-function printChromeCommand(port) {
-  const platform = os.platform();
-  console.log('Launch Chrome with HNS support:\n');
-  if (platform === 'win32') {
-    console.log(`  chrome.exe --proxy-server="http://127.0.0.1:${port}"`);
-  } else if (platform === 'darwin') {
-    console.log(`  open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:${port}"`);
-  } else {
-    console.log(`  google-chrome --proxy-server="http://127.0.0.1:${port}"`);
-  }
-  console.log(`\nThen navigate to http://nb/ or http://shakeshift/ in your browser.\n`);
 }
 
 async function proxyMode(opts) {
