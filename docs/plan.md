@@ -7,13 +7,14 @@ check-hns resolves Handshake (HNS) domains directly from the blockchain. v1 used
 ## Architecture
 
 ```
-check_hns.js               CLI entry point (sync/query/auto modes)
+check_hns.js               CLI entry point (sync/query/proxy/auto modes)
   ├── lib/dns_wire.js       DNS wire protocol encoder/decoder (A, AAAA, NS, CNAME, TXT, SOA, MX, SRV, DS)
   ├── lib/hnsd_manager.js   hnsd process lifecycle (spawn, sync detection, readiness polling, PID file)
-  └── bin/hnsd.exe          Built hnsd binary + DLLs (gitignored)
+  ├── lib/dns_proxy.js      Local DNS proxy (UDP forwarder port 53 → hnsd port 15350)
+  └── bin/hnsd[.exe]        Built hnsd binary (gitignored)
 
-build_hnsd.sh               MSYS2/MINGW64 build script
-build_hnsd.cmd              Windows wrapper
+build_hnsd.sh               Cross-platform build script (Windows/macOS/Linux)
+build_hnsd.cmd              Windows wrapper (launches MSYS2 MINGW64 shell)
 
 test/
   test_dns_wire.js          14 unit tests — wire format encoding/decoding
@@ -21,16 +22,22 @@ test/
   test_resolve.js           6 E2E tests — domain resolution against running hnsd
 ```
 
-## Build requirements (Windows)
+## Build requirements
 
-MSYS2 MINGW64 with packages:
-- `base-devel`, `mingw-w64-x86_64-toolchain` (gcc, make, autotools)
-- `mingw-w64-x86_64-unbound` (libunbound for recursive DNS)
-- `git`
-
-Build: `./autogen.sh && ./configure && make` inside vendor/hnsd/
+### Windows
+MSYS2 MINGW64 with packages: `base-devel`, `mingw-w64-x86_64-toolchain`, `mingw-w64-x86_64-unbound`, `git`
 
 Runtime DLLs copied to bin/: `libunbound-8.dll`, `libcrypto-3-x64.dll`, `libssl-3-x64.dll`
+
+### macOS
+Homebrew packages: `autoconf`, `automake`, `libtool`, `unbound`, `openssl`, `git`
+
+### Linux
+- Debian/Ubuntu: `build-essential`, `autoconf`, `automake`, `libtool`, `libunbound-dev`, `libssl-dev`, `git`
+- Fedora/RHEL: `gcc`, `make`, `autoconf`, `automake`, `libtool`, `unbound-devel`, `openssl-devel`, `git`
+- Arch: `base-devel`, `autoconf`, `automake`, `libtool`, `unbound`, `openssl`, `git`
+
+Build: `./autogen.sh && ./configure && make` inside vendor/hnsd/
 
 ## hnsd integration details
 
@@ -44,6 +51,7 @@ Runtime DLLs copied to bin/: `libunbound-8.dll`, `libcrypto-3-x64.dll`, `libssl-
 ### Ports
 | Port  | Service               |
 |-------|-----------------------|
+| 53    | DNS proxy (proxy mode)|
 | 15349 | Authoritative root NS |
 | 15350 | Recursive resolver    |
 
@@ -55,11 +63,33 @@ Runtime DLLs copied to bin/: `libunbound-8.dll`, `libcrypto-3-x64.dll`, `libssl-
    - Query external nameservers directly on port 53
 3. If NXDOMAIN → try parent TLD to show delegation info
 
+### ICANN domain resolution
+hnsd's authoritative root server includes a hardcoded fallback for ICANN's root zone (`src/tld.h` — 1,481 TLDs). When a query is for an ICANN TLD (.com, .org, .net, etc.), hnsd returns embedded NS records pointing to real ICANN root servers. libunbound then follows these delegations to resolve regular domains like google.com.
+
+This means hnsd is a **full recursive resolver** for both HNS and ICANN domains, making the DNS proxy a simple UDP forwarder.
+
+### DNS proxy architecture
+```
+Browser / System DNS
+  ↓ query (port 53)
+DNS proxy (lib/dns_proxy.js)
+  ↓ forward (port 15350)
+hnsd recursive resolver (libunbound)
+  ↓ query (port 15349)
+hnsd authoritative root
+  ├─ HNS domain → SPV blockchain lookup → NS delegation → recursive resolve
+  ├─ ICANN domain → embedded root zone → NS delegation → recursive resolve
+  └─ Blocked TLD (.onion, .eth, etc.) → NXDOMAIN
+```
+
+If hnsd doesn't respond within 5 seconds, the proxy falls back to upstream DNS (8.8.8.8) as a safety net.
+
 ### Verified resolution results
 | Domain           | Result                    | Method              |
 |------------------|---------------------------|---------------------|
 | nb               | A 35.81.54.236            | libunbound recursive |
 | shakeshift       | A 23.88.55.248            | libunbound recursive (HNS-native NS: a.namenode.) |
+| google.com       | A (varies)                | libunbound via ICANN fallback |
 | welcome.nb       | NXDOMAIN + parent fallback | libunbound recursive |
 | nonexistent12345 | NXDOMAIN                  | libunbound recursive |
 
@@ -72,7 +102,9 @@ libunbound handles HNS-native nameserver delegations natively — the direct NS 
 | SPV node             | hsd JS (in-process)              | hnsd C binary (child process)    |
 | Recursive resolver   | bns (JS)                         | libunbound (C)                   |
 | HNS-native NS        | Fails → direct NS fallback      | Resolves natively                |
+| ICANN domains        | Not supported                    | Embedded root zone fallback      |
 | npm dependencies     | hsd (heavy, pulls bns, bcrypto)  | None                             |
 | DNS wire protocol    | bns library                      | lib/dns_wire.js (self-contained) |
-| Memory usage         | ~12 MB (JS heap)                 | ~38 MB (native + libunbound)     |
-| Build requirement    | npm install                      | MSYS2 + build from source        |
+| Browser integration  | None                             | DNS proxy on port 53             |
+| Build requirement    | npm install                      | autotools + build from source    |
+| Platforms            | Windows only                     | Windows, macOS, Linux            |
