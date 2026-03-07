@@ -1,7 +1,7 @@
 {
   "name": "check-hns",
-  "version": "1.0.0",
-  "description": "Resolve Handshake (HNS) domains via hsd SPV node (direct blockchain resolution)",
+  "version": "2.0.0",
+  "description": "Resolve Handshake (HNS) domains via hnsd SPV resolver (direct blockchain resolution)",
   "main": "check_hns.js",
   "bin": {
     "check-hns": "./check_hns.js"
@@ -9,10 +9,12 @@
   "scripts": {
     "sync": "node check_hns.js sync",
     "query": "node check_hns.js query",
-    "start": "node check_hns.js sync"
-  },
-  "dependencies": {
-    "hsd": "^8.0.0"
+    "start": "node check_hns.js sync",
+    "test": "node --test test/test_dns_wire.js test/test_hnsd_spawn.js",
+    "test:unit": "node --test test/test_dns_wire.js",
+    "test:e2e": "node --test test/test_resolve.js",
+    "test:all": "node --test test/",
+    "build": "bash build_hnsd.sh"
   },
   "engines": {
     "node": ">=18.0.0"
