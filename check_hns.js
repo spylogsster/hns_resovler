@@ -352,44 +352,56 @@ async function proxyMode(opts) {
   const useDns = opts.dns || false;
   const mode = useDns ? 'DNS' : 'HTTP';
   console.log(`HNS Domain Resolver — ${mode} Proxy Mode`);
-  console.log(`Data dir: ${hnsd.DATA_DIR}`);
-  console.log();
 
-  const { child } = hnsd.start({ hnsdPath: opts.hnsdPath });
+  let child = null;
+  let ownedHnsd = false;
+  let rsPort = hnsd.RS_PORT;
 
-  child.stderr.on('data', (data) => {
-    for (const line of data.toString().split('\n')) {
-      if (line.trim()) process.stderr.write(`  [hnsd] ${line}\n`);
-    }
-  });
+  // Check if hnsd is already running
+  try {
+    await queryDNS('127.0.0.1', rsPort, '.', types.NS, 3000);
+    console.log(`Using existing hnsd at 127.0.0.1:${rsPort}\n`);
+  } catch {
+    // No hnsd running — start one
+    console.log(`Data dir: ${hnsd.DATA_DIR}\n`);
+    const result = hnsd.start({ hnsdPath: opts.hnsdPath });
+    child = result.child;
+    ownedHnsd = true;
+
+    child.stderr.on('data', (data) => {
+      for (const line of data.toString().split('\n')) {
+        if (line.trim()) process.stderr.write(`  [hnsd] ${line}\n`);
+      }
+    });
+
+    hnsd.writePidFile(child.pid, rsPort);
+
+    console.log('Waiting for blockchain sync...');
+    await hnsd.waitForSync(child);
+
+    console.log('Checking resolver readiness...');
+    await hnsd.waitForReady(rsPort);
+
+    console.log(`hnsd synced and ready.\n`);
+  }
 
   let proxy;
   const cleanup = () => {
     console.log('\nShutting down...');
     if (proxy) proxy.close();
-    hnsd.stop(child);
-    console.log(`\n${mode} proxy stopped.${useDns ? ' Remember to restore your system DNS settings.' : ''}`);
+    if (ownedHnsd && child) hnsd.stop(child);
+    console.log(`${mode} proxy stopped.${useDns ? ' Remember to restore your system DNS settings.' : ''}`);
     process.exit(0);
   };
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 
-  hnsd.writePidFile(child.pid, hnsd.RS_PORT);
-
-  console.log('Waiting for blockchain sync...');
-  const height = await hnsd.waitForSync(child);
-
-  console.log('Checking resolver readiness...');
-  await hnsd.waitForReady(hnsd.RS_PORT);
-
-  console.log(`\nhnsd synced at height ${height}`);
-
   if (useDns) {
-    proxy = startDnsProxy({ hnsdPort: hnsd.RS_PORT });
+    proxy = startDnsProxy({ hnsdPort: rsPort });
     printDnsProxyInstructions();
   } else {
     const port = opts.port || DEFAULT_HTTP_PORT;
-    proxy = startHttpProxy({ port, hnsdPort: hnsd.RS_PORT });
+    proxy = startHttpProxy({ port, hnsdPort: rsPort });
     printHttpProxyInstructions(port);
   }
 
