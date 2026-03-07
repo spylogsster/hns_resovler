@@ -1,8 +1,10 @@
 # check-hns
 
-Resolve Handshake (HNS) domains directly from the blockchain using the hnsd SPV resolver.
+Resolve Handshake (HNS) domains directly from the blockchain using the [hnsd](https://github.com/handshake-org/hnsd) SPV resolver.
 
-Unlike DoH resolvers that delegate to external nameservers, this tool runs a lightweight SPV node (hnsd) that syncs Handshake blockchain headers and resolves names from on-chain data using libunbound for recursive DNS resolution.
+Unlike DoH resolvers that delegate to external services, this tool runs a lightweight SPV node that syncs Handshake blockchain headers and resolves names from on-chain data. Uses libunbound for recursive DNS resolution, which natively handles HNS-native nameserver delegations (e.g. domains pointing to `a.namenode.`).
+
+No npm dependencies — only Node.js and the hnsd binary are required.
 
 ## Prerequisites
 
@@ -11,9 +13,9 @@ Unlike DoH resolvers that delegate to external nameservers, this tool runs a lig
 
 ## Building hnsd
 
-hnsd is a C binary that must be built from source. On Windows, this requires MSYS2 with the MINGW64 toolchain.
+hnsd is a C binary built from source. On Windows this requires MSYS2 with the MINGW64 toolchain.
 
-### Install MSYS2
+### 1. Install MSYS2
 
 ```bash
 choco install msys2 -y
@@ -21,7 +23,7 @@ choco install msys2 -y
 
 Or download from https://www.msys2.org
 
-### Build
+### 2. Build
 
 **Windows (from cmd/PowerShell):**
 ```
@@ -33,11 +35,7 @@ build_hnsd.cmd
 ./build_hnsd.sh
 ```
 
-The build script:
-1. Installs required packages (gcc, make, autotools, libunbound)
-2. Clones the hnsd repository
-3. Builds hnsd.exe
-4. Copies the binary to `./bin/`
+The build script installs required packages (gcc, make, autotools, libunbound, git), clones the [hnsd repository](https://github.com/handshake-org/hnsd), builds it, and copies the binary + DLLs to `./bin/`.
 
 ## Usage
 
@@ -49,7 +47,7 @@ The build script:
 node check_hns.js sync
 ```
 
-First run syncs the full blockchain (~30 min). Subsequent runs resume from cached state (~1 min).
+First run syncs the blockchain from checkpoint (~5 min). Subsequent runs resume from cached state (~1 min).
 Chain data is stored in `%TEMP%/hnsd-spv-check/` (Windows) or `/tmp/hnsd-spv-check/` (Linux/Mac).
 
 **2. Query mode** — query a running hnsd instance:
@@ -94,46 +92,67 @@ node check_hns.js sync
 
 # Terminal 2: query as needed
 node check_hns.js query nb
-node check_hns.js query welcome.nb
 node check_hns.js query shakeshift
+node check_hns.js query welcome.nb
 ```
 
 ## Example output
 
 ```
 HNS Domain Resolver (querying hnsd at 127.0.0.1:15350)
-Domains: nb, shakeshift
+Domains: nb, shakeshift, welcome.nb, nonexistent12345
+
 
 =======================================================
 Domain: nb
 =======================================================
-  A      35.81.54.236  (TTL=86400)
+  A      35.81.54.236  (TTL=86393)
+  NS     ns1.hns.id.  (TTL=86400)
+  NS     ns2.hns.id.  (TTL=86400)
 
 =======================================================
 Domain: shakeshift
 =======================================================
-  A      23.88.55.248  (TTL=300)
+  A      23.88.55.248  (TTL=43175)
+
+=======================================================
+Domain: welcome.nb
+=======================================================
+  RCODE: NXDOMAIN (recursive resolver)
+  (authority) SOA    ns1.hns.id. support.hns.id. (serial=2024032114)
+  NXDOMAIN - domain not found
+
+  Trying parent TLD: nb
+  nb -> A 35.81.54.236
+  (subdomain "welcome.nb" not found, but parent TLD resolves)
+
+=======================================================
+Domain: nonexistent12345
+=======================================================
+  RCODE: NXDOMAIN (recursive resolver)
+  (authority) SOA    . . (serial=2026030708)
+  NXDOMAIN - domain not found
+
+Done.
 ```
 
 ## How it works
 
-1. The hnsd SPV node connects to Handshake P2P peers and syncs block headers
-2. When queried, it fetches name proofs from peers and resolves them against the blockchain state
-3. An authoritative root server translates on-chain name data into DNS responses
-4. libunbound handles recursive DNS resolution (following NS delegations, including HNS-native nameservers)
-5. If the recursive resolver fails for domains with HNS-native nameservers, a direct NS fallback queries the authoritative root for NS+glue and queries nameservers directly
+1. hnsd connects to Handshake P2P peers and syncs block headers (SPV mode)
+2. An authoritative root server translates on-chain name data into DNS responses
+3. libunbound handles recursive DNS resolution, following NS delegations including HNS-native nameservers
+4. If the recursive resolver returns SERVFAIL/REFUSED, a direct NS fallback queries the authoritative root for NS+glue and queries nameservers directly on port 53
 
 ## Architecture
 
 ```
-check_hns.js
-  ├── lib/dns_wire.js        # DNS wire protocol (encode/decode, no npm deps)
-  ├── lib/hnsd_manager.js    # hnsd process lifecycle management
-  └── bin/hnsd.exe           # Built hnsd binary (gitignored)
+check_hns.js                 CLI entry point (sync/query/auto modes)
+  ├── lib/dns_wire.js        DNS wire protocol encoder/decoder (no npm deps)
+  ├── lib/hnsd_manager.js    hnsd process lifecycle management
+  └── bin/hnsd.exe           Built hnsd binary + DLLs (gitignored)
 ```
 
-v2 uses hnsd (C binary with libunbound) instead of hsd (JavaScript SPV node with bns).
-This provides better recursive resolution and eliminates npm dependencies.
+See [docs/plan.md](docs/plan.md) for detailed architecture notes.
 
 ## Ports
 
@@ -147,14 +166,17 @@ All bound to `127.0.0.1` (localhost only).
 ## Testing
 
 ```bash
-# Unit tests (no hnsd required)
+# Unit tests (no hnsd required) — 20 tests
 npm test
 
-# E2E tests (requires running synced hnsd)
-node check_hns.js sync &   # start hnsd in background
-npm run test:e2e            # run E2E tests
+# E2E tests (requires running synced hnsd) — 6 tests
+node check_hns.js sync    # start hnsd in another terminal
+npm run test:e2e
+
+# All tests — 26 tests
+npm run test:all
 ```
 
 ## License
 
-MPL-2.0
+[MPL-2.0](LICENSE)
