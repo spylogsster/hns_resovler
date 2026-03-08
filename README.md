@@ -1,5 +1,18 @@
 # check-hns
 
+## Quick Start
+
+```bash
+node check_hns.js proxy
+# Wait for sync, then launch Chrome with the proxy:
+#   Windows: chrome.exe --proxy-server="http://127.0.0.1:8053"
+#   macOS:   open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:8053"
+#   Linux:   google-chrome --proxy-server="http://127.0.0.1:8053"
+# Navigate to http://nb/ or http://shakeshift/
+```
+
+---
+
 Resolve Handshake (HNS) domains directly from the blockchain using the [hnsd](https://github.com/handshake-org/hnsd) SPV resolver.
 
 Unlike DoH resolvers that delegate to external services, this tool runs a lightweight SPV node that syncs Handshake blockchain headers and resolves names from on-chain data. Uses libunbound for recursive DNS resolution, which natively handles HNS-native nameserver delegations (e.g. domains pointing to `a.namenode.`).
