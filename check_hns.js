@@ -431,7 +431,7 @@ async function proxyMode(opts) {
     printDnsProxyInstructions();
   } else {
     const port = opts.port || DEFAULT_HTTP_PORT;
-    proxy = startHttpProxy({ port, hnsdPort: rsPort });
+    proxy = startHttpProxy({ port, hnsdPort: rsPort, noDane: opts.noDane });
     printChromeCommand(port);
   }
 
