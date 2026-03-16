@@ -159,6 +159,7 @@ async function resolveDomain(rsHost, rsPort, domain, opts = {}) {
   let anyRecords = false;
   let nxdomain = false;
   let needFallback = false;
+  const resolvedIPs = []; // Collect IPs for DANE verification
 
   for (const qtype of QUERY_TYPES) {
     const tn = typeName(qtype);
@@ -180,6 +181,9 @@ async function resolveDomain(rsHost, rsPort, domain, opts = {}) {
         const r = recordToString(rr);
         anyRecords = true;
         console.log(`  ${r.typeName.padEnd(6)} ${r.data}  (TTL=${r.ttl})`);
+        if (rr.type === types.A || rr.type === types.AAAA) {
+          resolvedIPs.push(rr.data.address);
+        }
       }
     } catch (e) {
       if (qtype === QUERY_TYPES[0]) {
@@ -221,6 +225,9 @@ async function resolveDomain(rsHost, rsPort, domain, opts = {}) {
           const r = recordToString(rr);
           anyRecords = true;
           console.log(`  ${r.typeName.padEnd(6)} ${r.data}  (TTL=${r.ttl})`);
+          if (rr.type === types.A || rr.type === types.AAAA) {
+            resolvedIPs.push(rr.data.address);
+          }
         }
       }
     }
@@ -234,24 +241,13 @@ async function resolveDomain(rsHost, rsPort, domain, opts = {}) {
         for (const rr of tlsaRecords) {
           console.log(`  TLSA   ${rr.usage} ${rr.selector} ${rr.matchingType} ${rr.certData}  (TTL=${rr.ttl})`);
         }
-        // Find the first A record IP for TLS connection
-        let ip = null;
-        for (const qtype of [types.A, types.AAAA]) {
-          try {
-            const res = await queryDNS(rsHost, rsPort, domain, qtype);
-            if (res.code === 0) {
-              for (const rr of res.answer) {
-                if (rr.type === types.A) { ip = rr.data.address; break; }
-              }
-            }
-          } catch { /* skip */ }
-          if (ip) break;
-        }
+        // Reuse IPs already resolved from the query loop above
+        const ip = resolvedIPs.length > 0 ? resolvedIPs[0] : null;
         if (ip) {
           const result = await verifyDANE(ip, domain, 443, tlsaRecords);
           console.log(`  DANE   ${formatDANEResult(result)}`);
         } else {
-          console.log('  DANE   SKIPPED - no A record to connect to');
+          console.log('  DANE   SKIPPED - no A/AAAA record to connect to');
         }
       }
     } catch {

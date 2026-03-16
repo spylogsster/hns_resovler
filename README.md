@@ -310,14 +310,14 @@ All bound to `127.0.0.1` (localhost only).
 ## Testing
 
 ```bash
-# Unit tests (no hnsd required) — 27 tests
+# Unit tests (no hnsd required) — 28 tests
 npm test
 
 # E2E tests (requires running synced hnsd) — 6 tests
 node check_hns.js sync    # start hnsd in another terminal
 npm run test:e2e
 
-# All tests — 33 tests
+# All tests — 34 tests
 npm run test:all
 ```
 

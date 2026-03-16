@@ -82,6 +82,23 @@ describe('dane', () => {
       assert.ok(formatted.includes('does not match'));
     });
 
+    it('should format PKIX partial verification result', () => {
+      const result = {
+        verified: true,
+        usage: 1,
+        selector: 1,
+        matchingType: 1,
+        usageName: 'PKIX-EE',
+        selectorName: 'SubjectPublicKeyInfo',
+        matchingName: 'SHA-256',
+        pkixPartial: true,
+      };
+      const formatted = formatDANEResult(result);
+      assert.ok(formatted.includes('VERIFIED'));
+      assert.ok(formatted.includes('PKIX-EE'));
+      assert.ok(formatted.includes('PKIX: hash match only'));
+    });
+
     it('should format connection error result', () => {
       const result = {
         verified: false,
