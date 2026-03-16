@@ -3,19 +3,27 @@
 ## Quick Start
 
 ```bash
+# 1. Start the proxy (syncs blockchain, then starts HTTP proxy + DANE verification)
 node check_hns.js proxy
-# Wait for sync, then launch Chrome with the proxy:
-#   Windows: chrome.exe --proxy-server="http://127.0.0.1:8053"
-#   macOS:   open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:8053"
-#   Linux:   google-chrome --proxy-server="http://127.0.0.1:8053"
-# Navigate to http://nb/ or http://shakeshift/
+
+# 2. Launch Chrome with the proxy:
+#    Windows: chrome.exe --proxy-server="http://127.0.0.1:8053"
+#    macOS:   open -a "Google Chrome" --args --proxy-server="http://127.0.0.1:8053"
+#    Linux:   google-chrome --proxy-server="http://127.0.0.1:8053"
+
+# 3. Navigate to https://shakeshift/ — watch the terminal for DANE verification:
+#      [proxy] CONNECT shakeshift:443
+#      [dane]  shakeshift:443 TLSA=[3 1 1] VERIFIED - certificate matches TLSA record (SHA-256, DANE-EE)
+
+# Or query directly:
+node check_hns.js query shakeshift
 ```
 
 ---
 
-Resolve Handshake (HNS) domains directly from the blockchain using the [hnsd](https://github.com/handshake-org/hnsd) SPV resolver.
+Resolve Handshake (HNS) domains directly from the blockchain using the [hnsd](https://github.com/handshake-org/hnsd) SPV resolver. Includes built-in DANE (DNS-based Authentication of Named Entities) verification — the decentralized alternative to CA-based TLS certificates.
 
-Unlike DoH resolvers that delegate to external services, this tool runs a lightweight SPV node that syncs Handshake blockchain headers and resolves names from on-chain data. Uses libunbound for recursive DNS resolution, which natively handles HNS-native nameserver delegations (e.g. domains pointing to `a.namenode.`).
+Unlike DoH resolvers that delegate to external services, this tool runs a lightweight SPV node that syncs Handshake blockchain headers and resolves names from on-chain data. Uses libunbound for recursive DNS resolution, which natively handles HNS-native nameserver delegations (e.g. domains pointing to `a.namenode.`). TLSA records published on-chain are automatically verified against server TLS certificates.
 
 Also resolves regular ICANN domains (google.com, etc.) via hnsd's embedded root zone fallback.
 
@@ -213,13 +221,27 @@ Done.
 
 DANE (DNS-based Authentication of Named Entities) is the decentralized alternative to traditional SSL/TLS certificate authorities. Instead of trusting a CA to vouch for a server's certificate, the domain owner publishes a TLSA record on-chain that pins their certificate directly.
 
-When resolving a domain, check-hns automatically:
+DANE verification runs automatically in all modes:
+
+- **Proxy mode** — logs `[dane]` lines in the terminal when HTTPS tunnels are established
+- **Query/Auto mode** — prints TLSA records and verification results inline
+
+### How it works
 
 1. Queries `_443._tcp.<domain>` for TLSA records via hnsd
 2. Connects to the server over TLS and retrieves its certificate
 3. Verifies the certificate matches the on-chain TLSA record (SHA-256/SHA-512 hash comparison)
 
-Example output when a domain has TLSA records:
+### Proxy mode output
+
+```
+  [proxy] CONNECT shakeshift:443
+  [dane]  shakeshift:443 TLSA=[3 1 1] VERIFIED - certificate matches TLSA record (SHA-256, DANE-EE)
+```
+
+DANE checks run asynchronously and don't slow down browsing. Each domain is verified once per proxy session.
+
+### Query mode output
 
 ```
 =======================================================
@@ -230,7 +252,9 @@ Domain: example
   DANE   VERIFIED - certificate matches TLSA record (SHA-256, DANE-EE)
 ```
 
-TLSA record fields: `<usage> <selector> <matching-type> <certificate-data>`
+### TLSA record fields
+
+`<usage> <selector> <matching-type> <certificate-data>`
 
 | Usage | Name    | Meaning                                          |
 |-------|---------|--------------------------------------------------|
@@ -241,10 +265,13 @@ TLSA record fields: `<usage> <selector> <matching-type> <certificate-data>`
 
 Usage 3 (DANE-EE) is the most common for Handshake domains since there is no CA hierarchy.
 
-To skip DANE verification (faster queries):
+Domains without TLSA records are resolved normally with no DANE output.
+
+To skip DANE verification (faster queries/browsing):
 
 ```bash
 node check_hns.js query nb --no-dane
+node check_hns.js proxy --no-dane
 ```
 
 ## How it works
@@ -254,6 +281,7 @@ node check_hns.js query nb --no-dane
 3. libunbound handles recursive DNS resolution, following NS delegations including HNS-native nameservers
 4. For regular ICANN domains, hnsd falls back to embedded root zone data (1,481 TLDs) which delegates to real ICANN root servers
 5. If the recursive resolver returns SERVFAIL/REFUSED, a direct NS fallback queries the authoritative root for NS+glue and queries nameservers directly on port 53
+6. For domains with TLSA records, DANE verification connects to the server over TLS and verifies the certificate hash matches the on-chain record
 
 ## Architecture
 
@@ -289,7 +317,7 @@ npm test
 node check_hns.js sync    # start hnsd in another terminal
 npm run test:e2e
 
-# All tests — 26 tests
+# All tests — 33 tests
 npm run test:all
 ```
 
