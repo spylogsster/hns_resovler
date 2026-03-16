@@ -101,6 +101,7 @@ Waits for full sync, resolves all domains, then exits.
 --hnsd-path <path>   Path to hnsd binary (default: auto-detect from ./bin/)
 --port <port>        Proxy listen port (default: 8053 for HTTP, 53 for DNS)
 --dns                Use DNS proxy instead of HTTP proxy (requires root/admin)
+--no-dane            Skip DANE/TLSA certificate verification
 ```
 
 ### npm scripts
@@ -208,6 +209,44 @@ Domain: nonexistent12345
 Done.
 ```
 
+## DANE verification
+
+DANE (DNS-based Authentication of Named Entities) is the decentralized alternative to traditional SSL/TLS certificate authorities. Instead of trusting a CA to vouch for a server's certificate, the domain owner publishes a TLSA record on-chain that pins their certificate directly.
+
+When resolving a domain, check-hns automatically:
+
+1. Queries `_443._tcp.<domain>` for TLSA records via hnsd
+2. Connects to the server over TLS and retrieves its certificate
+3. Verifies the certificate matches the on-chain TLSA record (SHA-256/SHA-512 hash comparison)
+
+Example output when a domain has TLSA records:
+
+```
+=======================================================
+Domain: example
+=======================================================
+  A      1.2.3.4  (TTL=3600)
+  TLSA   3 1 1 e3b0c44298fc1c149afbf4c8996fb924...  (TTL=3600)
+  DANE   VERIFIED - certificate matches TLSA record (SHA-256, DANE-EE)
+```
+
+TLSA record fields: `<usage> <selector> <matching-type> <certificate-data>`
+
+| Usage | Name    | Meaning                                          |
+|-------|---------|--------------------------------------------------|
+| 0     | PKIX-TA | CA constraint (must chain to specified CA)        |
+| 1     | PKIX-EE | Service certificate constraint (CA-validated)     |
+| 2     | DANE-TA | Trust anchor assertion (domain-specified CA)       |
+| 3     | DANE-EE | Domain-issued certificate (no CA needed)           |
+
+Usage 3 (DANE-EE) is the most common for Handshake domains since there is no CA hierarchy.
+
+To skip DANE verification (faster queries):
+
+```bash
+node check_hns.js query nb --no-dane
+```
+
 ## How it works
 
 1. hnsd connects to Handshake P2P peers and syncs block headers (SPV mode)
@@ -223,6 +262,7 @@ check_hns.js                 CLI entry point (sync/query/proxy/auto modes)
   ├── lib/dns_wire.js        DNS wire protocol encoder/decoder (no npm deps)
   ├── lib/hnsd_manager.js    hnsd process lifecycle management
   ├── lib/dns_proxy.js       HTTP proxy + DNS proxy (resolves via hnsd)
+  ├── lib/dane.js            DANE/TLSA certificate verification
   └── bin/hnsd[.exe]         Built hnsd binary (gitignored)
 ```
 
@@ -242,7 +282,7 @@ All bound to `127.0.0.1` (localhost only).
 ## Testing
 
 ```bash
-# Unit tests (no hnsd required) — 20 tests
+# Unit tests (no hnsd required) — 27 tests
 npm test
 
 # E2E tests (requires running synced hnsd) — 6 tests

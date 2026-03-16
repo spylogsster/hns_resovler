@@ -158,6 +158,50 @@ describe('dns_wire', () => {
       assert.strictEqual(res.additional[0].data.address, '1.2.3.4');
     });
 
+    it('should parse TLSA record response', () => {
+      // TLSA response: _443._tcp.example. TLSA 3 1 1 <32 bytes sha256>
+      const sha256hex = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+      const sha256buf = Buffer.from(sha256hex, 'hex');
+      // Build a minimal DNS response with a TLSA answer
+      const question = Buffer.from([
+        // _443._tcp.example.
+        0x04, 0x5f, 0x34, 0x34, 0x33, // _443
+        0x04, 0x5f, 0x74, 0x63, 0x70, // _tcp
+        0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, // example
+        0x00,                          // root
+        0x00, 0x34,                    // QTYPE = TLSA (52)
+        0x00, 0x01,                    // QCLASS = IN
+      ]);
+      const rdlen = 3 + sha256buf.length; // usage + selector + matchingType + data
+      const answer = Buffer.alloc(12 + rdlen);
+      let off = 0;
+      // Name pointer to offset 12
+      answer.writeUInt16BE(0xc00c, off); off += 2;
+      answer.writeUInt16BE(52, off); off += 2;   // TYPE = TLSA
+      answer.writeUInt16BE(1, off); off += 2;    // CLASS = IN
+      answer.writeUInt32BE(3600, off); off += 4; // TTL
+      answer.writeUInt16BE(rdlen, off); off += 2;
+      answer[off++] = 3; // usage = DANE-EE
+      answer[off++] = 1; // selector = SPKI
+      answer[off++] = 1; // matchingType = SHA-256
+      sha256buf.copy(answer, off);
+
+      const header = Buffer.alloc(12);
+      header.writeUInt16BE(0x0005, 0); // ID
+      header.writeUInt16BE(0x8180, 2); // Flags
+      header.writeUInt16BE(1, 4);      // QDCOUNT
+      header.writeUInt16BE(1, 6);      // ANCOUNT
+
+      const buf = Buffer.concat([header, question, answer]);
+      const res = parseResponse(buf);
+      assert.strictEqual(res.answer.length, 1);
+      assert.strictEqual(res.answer[0].type, types.TLSA);
+      assert.strictEqual(res.answer[0].data.usage, 3);
+      assert.strictEqual(res.answer[0].data.selector, 1);
+      assert.strictEqual(res.answer[0].data.matchingType, 1);
+      assert.strictEqual(res.answer[0].data.certData, sha256hex);
+    });
+
     it('should parse TXT records', () => {
       const buf = Buffer.from([
         0x00, 0x04,             // ID
@@ -223,6 +267,16 @@ describe('dns_wire', () => {
       const rr = { type: types.SOA, ttl: 60, data: { ns: 'ns.', mbox: 'admin.', serial: 42 } };
       const s = recordToString(rr);
       assert.strictEqual(s.data, 'ns. admin. (serial=42)');
+    });
+
+    it('recordToString should format TLSA record', () => {
+      const rr = {
+        type: types.TLSA, ttl: 3600,
+        data: { usage: 3, selector: 1, matchingType: 1, certData: 'aabbccdd' },
+      };
+      const s = recordToString(rr);
+      assert.strictEqual(s.typeName, 'TLSA');
+      assert.strictEqual(s.data, '3 1 1 aabbccdd');
     });
   });
 

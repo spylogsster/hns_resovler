@@ -32,6 +32,7 @@ const dgram = require('dgram');
 const { types, buildQuery, parseResponse, rcodeName, typeName, recordToString } = require('./lib/dns_wire');
 const hnsd = require('./lib/hnsd_manager');
 const { startHttpProxy, startDnsProxy, printChromeCommand, printDnsProxyInstructions, DEFAULT_HTTP_PORT } = require('./lib/dns_proxy');
+const { queryTLSA, verifyDANE, formatDANEResult } = require('./lib/dane');
 
 const QUERY_TYPES = [types.A, types.AAAA, types.NS, types.CNAME, types.TXT];
 
@@ -150,7 +151,7 @@ async function queryNameserversDirect(nameservers, domain, qtype) {
   return null;
 }
 
-async function resolveDomain(rsHost, rsPort, domain) {
+async function resolveDomain(rsHost, rsPort, domain, opts = {}) {
   console.log(`\n${'='.repeat(55)}`);
   console.log(`Domain: ${domain}`);
   console.log('='.repeat(55));
@@ -222,6 +223,39 @@ async function resolveDomain(rsHost, rsPort, domain) {
           console.log(`  ${r.typeName.padEnd(6)} ${r.data}  (TTL=${r.ttl})`);
         }
       }
+    }
+  }
+
+  // DANE verification: query TLSA records and verify TLS certificate
+  if (anyRecords && !nxdomain && !opts.noDane) {
+    try {
+      const tlsaRecords = await queryTLSA(rsHost, rsPort, domain);
+      if (tlsaRecords.length > 0) {
+        for (const rr of tlsaRecords) {
+          console.log(`  TLSA   ${rr.usage} ${rr.selector} ${rr.matchingType} ${rr.certData}  (TTL=${rr.ttl})`);
+        }
+        // Find the first A record IP for TLS connection
+        let ip = null;
+        for (const qtype of [types.A, types.AAAA]) {
+          try {
+            const res = await queryDNS(rsHost, rsPort, domain, qtype);
+            if (res.code === 0) {
+              for (const rr of res.answer) {
+                if (rr.type === types.A) { ip = rr.data.address; break; }
+              }
+            }
+          } catch { /* skip */ }
+          if (ip) break;
+        }
+        if (ip) {
+          const result = await verifyDANE(ip, domain, 443, tlsaRecords);
+          console.log(`  DANE   ${formatDANEResult(result)}`);
+        } else {
+          console.log('  DANE   SKIPPED - no A record to connect to');
+        }
+      }
+    } catch {
+      // TLSA query failed (no records or timeout) — not an error, just no DANE
     }
   }
 
@@ -312,7 +346,7 @@ async function queryMode(domains, opts) {
   console.log(`Domains: ${domains.join(', ')}\n`);
 
   for (const domain of domains) {
-    await resolveDomain('127.0.0.1', port, domain);
+    await resolveDomain('127.0.0.1', port, domain, opts);
   }
   console.log('\nDone.');
 }
@@ -341,7 +375,7 @@ async function autoMode(domains, opts) {
   console.log(`Chain synced (height ${height}), resolving...\n`);
 
   for (const domain of domains) {
-    await resolveDomain('127.0.0.1', hnsd.RS_PORT, domain);
+    await resolveDomain('127.0.0.1', hnsd.RS_PORT, domain, opts);
   }
 
   console.log('\nShutting down hnsd...');
@@ -426,6 +460,7 @@ async function main() {
 
   opts.hnsdPath = extractOpt('--hnsd-path', true);
   opts.dns = extractOpt('--dns', false);
+  opts.noDane = extractOpt('--no-dane', false);
   const portStr = extractOpt('--port', true);
   if (portStr) opts.port = parseInt(portStr);
 
@@ -441,6 +476,7 @@ Options:
   --hnsd-path <path>   Path to hnsd binary (default: auto-detect)
   --port <port>        Proxy listen port (default: 8053 for HTTP, 53 for DNS)
   --dns                Use DNS proxy instead of HTTP proxy (requires root/admin)
+  --no-dane            Skip DANE/TLSA certificate verification
 
 Examples:
   node check_hns.js sync                          # Terminal 1: start & sync
